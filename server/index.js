@@ -29,32 +29,60 @@ function cleanJson(text) {
   return candidate;
 }
 
-// دالة الاتصال بـ OpenRouter API
+// دالة الاتصال بـ OpenRouter API مع قائمة موسعة من الموديلات المجانية الاحتياطية
 async function callOpenRouterAPI(messages, temperature = 0.2) {
-  const model = process.env.OPENROUTER_MODEL?.trim() || "meta-llama/llama-3.2-11b-vision-instruct:free";
+  // قائمة شاملة من الموديلات المجانية لضمان الاستمرارية وعدم التوقف
+  const rawModels = [
+    process.env.OPENROUTER_MODEL?.trim(),
+    "meta-llama/llama-3.2-11b-vision-instruct:free",
+    "qwen/qwen-2-vl-7b-instruct:free",
+    "google/gemini-2.0-flash-exp:free",
+    "google/gemini-2.0-pro-exp-02-05:free",
+    "google/gemini-2.0-flash-thinking-exp:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "qwen/qwen-2.5-coder-32b-instruct:free",
+    "mistralai/mistral-small-24b-instruct-2501:free",
+    "nvidia/llama-3.1-nemotron-70b-instruct:free"
+  ];
 
-  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY.trim()}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": "https://railway.app",
-      "X-Title": "StudyMate AI"
-    },
-    body: JSON.stringify({
-      model: model,
-      messages,
-      temperature,
-      max_tokens: 4000
-    })
-  });
+  // تصفية القيم الفارغة وحذف المكرر
+  const models = [...new Set(rawModels.filter(Boolean))];
 
-  const data = await response.json();
-  if (!response.ok) {
-    const msg = data?.error?.message || `OpenRouter API error ${response.status}`;
-    throw new Error(msg);
+  let lastError = null;
+
+  for (const model of models) {
+    try {
+      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY.trim()}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://railway.app",
+          "X-Title": "StudyMate AI"
+        },
+        body: JSON.stringify({
+          model: model,
+          messages,
+          temperature,
+          max_tokens: 4000
+        })
+      });
+
+      const data = await response.json();
+      
+      if (response.ok && data?.choices?.[0]?.message?.content) {
+        return data.choices[0].message.content;
+      }
+
+      lastError = data?.error?.message || `HTTP ${response.status} on model ${model}`;
+      console.warn(`[OpenRouter Fallback] فشل الموديل ${model}: ${lastError}. تجربة الموديل التالي...`);
+    } catch (e) {
+      lastError = e.message;
+      console.warn(`[OpenRouter Fallback] خطأ شبكة مع ${model}: ${lastError}. تجربة الموديل التالي...`);
+    }
   }
-  return data?.choices?.[0]?.message?.content || "";
+
+  throw new Error(`فشلت جميع الموديلات المتاحة. آخر خطأ: ${lastError}`);
 }
 
 app.post("/api/analyze-images", upload.array("pages", 60), async (req, res) => {
