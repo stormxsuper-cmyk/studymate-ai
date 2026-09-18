@@ -5,14 +5,18 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const app = express();
+
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-// جلب البيانات من متغيرات البيئة
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY?.trim();
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL?.trim() || "google/gemini-2.0-flash-exp:free";
 
-// دالة لتنظيف واستخراج الـ JSON النصي من استجابة الذكاء الاصطناعي
+// 1. حل مشكلة Cannot GET /
+app.get('/', (req, res) => {
+  res.status(200).send('<h1>StudyMate AI Backend is Live! 🚀</h1><p>OCR API Endpoint: <code>POST /api/ocr</code></p>');
+});
+
 function cleanJson(text) {
   try {
     const jsonMatch = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
@@ -26,7 +30,6 @@ function cleanJson(text) {
   }
 }
 
-// دالة الاتصال الرئيسية بـ OpenRouter
 async function callVisionAPI(messages) {
   if (!OPENROUTER_API_KEY) {
     throw new Error("لم يتم العثور على OPENROUTER_API_KEY في متغيرات البيئة.");
@@ -57,7 +60,6 @@ async function callVisionAPI(messages) {
   return data?.choices?.[0]?.message?.content || "";
 }
 
-// الـ Endpoint الخاص بمعالجة الصور واستخراج النصوص
 app.post('/api/ocr', async (req, res) => {
   try {
     const { imageBase64, prompt } = req.body;
