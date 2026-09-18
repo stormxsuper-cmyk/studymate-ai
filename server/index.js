@@ -12,9 +12,12 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { files: 60, fi
 app.use(cors());
 app.use(express.json({ limit: "4mb" }));
 
+// جلب مفتاح Groq بغض النظر عن الاسم المسجل به في متغيرات البيئة
+const GROQ_KEY = process.env.GROQ_API_KEY || process.env.OPENROUTER_API_KEY;
+
 function requireKey(res) {
-  if (!process.env.OPENROUTER_API_KEY) {
-    res.status(500).json({ error: "API Key غير موجود في متغيرات البيئة." });
+  if (!GROQ_KEY) {
+    res.status(500).json({ error: "مفتاح API الخاص بـ Groq غير مفعل في متغيرات البيئة." });
     return false;
   }
   return true;
@@ -29,7 +32,9 @@ function cleanJson(text) {
   return candidate;
 }
 
+// دالة الاتصال المباشر مع Groq
 async function callGroqAPI(messages, temperature = 0.2, isVision = false) {
+  // تحديد الموديلات الصحيحة والخاصة بـ Groq حصراً
   const model = isVision 
     ? "llama-3.2-11b-vision-preview" 
     : "llama-3.3-70b-versatile";
@@ -37,7 +42,7 @@ async function callGroqAPI(messages, temperature = 0.2, isVision = false) {
   const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+      "Authorization": `Bearer ${GROQ_KEY.trim()}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
@@ -50,7 +55,8 @@ async function callGroqAPI(messages, temperature = 0.2, isVision = false) {
 
   const data = await response.json();
   if (!response.ok) {
-    const msg = data?.error?.message || `Groq API error ${response.status}`;
+    const msg = data?.error?.message || `Groq API Error Status: ${response.status}`;
+    console.error("Groq Error Response:", data);
     throw new Error(msg);
   }
   return data?.choices?.[0]?.message?.content || "";
@@ -58,18 +64,18 @@ async function callGroqAPI(messages, temperature = 0.2, isVision = false) {
 
 app.post("/api/analyze-images", upload.array("pages", 60), async (req, res) => {
   if (!requireKey(res)) return;
-  if (!req.files?.length) return res.status(400).json({ error: "لم يتم إرسال صور." });
+  if (!req.files?.length) return res.status(400).json({ error: "لم يتم استلام أي صور." });
 
   const pages = [];
   for (let i = 0; i < req.files.length; i++) {
     const file = req.files[i];
     const mime = file.mimetype || "image/jpeg";
     if (!mime.startsWith("image/")) {
-      pages.push({ page: i + 1, status: "failed", title: null, reason: "الملف ليس صورة." });
+      pages.push({ page: i + 1, status: "failed", title: null, reason: "نوع الملف ليس صورة." });
       continue;
     }
 
-    const prompt = `استخرج كل النصوص والعناوين والأسئلة الموجودة في هذه الصورة باللغة العربية بوضوح.`;
+    const prompt = `استخرج النصوص والعناوين الموجودة باللغة العربية داخل هذه الصفحة المرفقة بشكل دقيق.`;
 
     try {
       const content = await callGroqAPI([
@@ -90,20 +96,21 @@ app.post("/api/analyze-images", upload.array("pages", 60), async (req, res) => {
         if (parsed.text) extractedText = parsed.text;
         if (parsed.title) title = parsed.title;
       } catch {
-        // إذا أرجع الموديل نصاً عادياً وليس JSON، نعتمده مباشرة بدون إفشال العملية
+        // الاعتماد على النص المباشر القادم من الذكاء الاصطناعي إذا لم يرجع JSON
       }
 
-      const hasContent = Boolean(extractedText && extractedText.trim().length > 0);
+      const hasText = Boolean(extractedText && extractedText.trim().length > 0);
 
       pages.push({
         page: i + 1,
-        status: hasContent ? "ok" : "failed",
+        status: hasText ? "ok" : "failed",
         title: title,
-        confidence: hasContent ? 90 : 0,
-        text: hasContent ? extractedText : "",
-        reason: hasContent ? null : "لم يتم استخراج أي نص من الصورة."
+        confidence: hasText ? 95 : 0,
+        text: hasText ? extractedText : "",
+        reason: hasText ? null : "تعذر استخراج كلام مقروء من الصورة."
       });
     } catch (e) {
+      console.error(`Page ${i + 1} Error:`, e.message);
       pages.push({ page: i + 1, status: "failed", title: null, confidence: 0, text: "", reason: e.message });
     }
   }
