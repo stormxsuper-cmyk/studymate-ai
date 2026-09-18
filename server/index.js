@@ -1,4 +1,4 @@
-import "dotenv/config";
+Import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import multer from "multer";
@@ -14,7 +14,7 @@ app.use(express.json({ limit: "4mb" }));
 
 function requireKey(res) {
   if (!process.env.OPENROUTER_API_KEY) {
-    res.status(500).json({ error: "OPENROUTER_API_KEY غير موجود في متغيرات البيئة." });
+    res.status(500).json({ error: "API Key غير موجود في متغيرات البيئة." });
     return false;
   }
   return true;
@@ -22,32 +22,37 @@ function requireKey(res) {
 
 function cleanJson(text) {
   const raw = String(text || "").trim();
-  const fenced = raw.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/i);
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
   const candidate = fenced ? fenced[1].trim() : raw;
   const first = Math.min(...[candidate.indexOf("{"), candidate.indexOf("[")].filter(x => x >= 0));
   if (Number.isFinite(first)) return candidate.slice(first);
   return candidate;
 }
 
-async function callOpenRouter(messages, temperature = 0.2) {
-  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+// تعديل الاتصال ليكون بـ Groq API مباشرة
+async function callGroqAPI(messages, temperature = 0.2, isVision = false) {
+  // اختيار الموديل المناسب بناءً على هل الطلب صورة أم نص
+  const model = isVision 
+    ? "llama-3.2-11b-vision-preview" 
+    : "llama-3.3-70b-versatile";
+
+  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": process.env.OPENROUTER_SITE_URL || "http://localhost:5173",
-      "X-Title": process.env.OPENROUTER_SITE_NAME || "StudyMate AI"
+      "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      model: process.env.OPENROUTER_MODEL || "google/gemma-3-27b-it:free",
+      model: model,
       messages,
       temperature,
-      max_tokens: 7000
+      max_tokens: 4000
     })
   });
+
   const data = await response.json();
   if (!response.ok) {
-    const msg = data?.error?.message || `OpenRouter error ${response.status}`;
+    const msg = data?.error?.message || `Groq API error ${response.status}`;
     throw new Error(msg);
   }
   return data?.choices?.[0]?.message?.content || "";
@@ -83,13 +88,15 @@ app.post("/api/analyze-images", upload.array("pages", 60), async (req, res) => {
 - لا تكتب شرحاً؛ المطلوب استخراج الصفحة فقط.`;
 
     try {
-      const content = await callOpenRouter([{
-        role: "user",
-        content: [
-          { type: "text", text: prompt },
-          { type: "image_url", image_url: { url: `data:${mime};base64,${file.buffer.toString("base64")}` } }
-        ]
-      }], 0.1);
+      const content = await callGroqAPI([
+        {
+          role: "user",
+          content: [
+            { type: "text", text: prompt },
+            { type: "image_url", image_url: { url: `data:${mime};base64,${file.buffer.toString("base64")}` } }
+          ]
+        }
+      ], 0.1, true); // true تعني استخدام موديل الصور
 
       let parsed;
       try { parsed = JSON.parse(cleanJson(content)); } catch {
@@ -144,7 +151,7 @@ app.post("/api/generate-note", async (req, res) => {
 ${sourceText}`;
 
   try {
-    const content = await callOpenRouter([{ role: "user", content: prompt }], 0.25);
+    const content = await callGroqAPI([{ role: "user", content: prompt }], 0.25, false);
     res.json(JSON.parse(cleanJson(content)));
   } catch (e) {
     res.status(502).json({ error: e.message || "فشل إنشاء المذكرة." });
@@ -187,7 +194,7 @@ app.post("/api/generate-questions", async (req, res) => {
 ${sourceText}`;
 
   try {
-    const content = await callOpenRouter([{ role: "user", content: prompt }], 0.35);
+    const content = await callGroqAPI([{ role: "user", content: prompt }], 0.35, false);
     const parsed = JSON.parse(cleanJson(content));
     res.json({ questions: Array.isArray(parsed.questions) ? parsed.questions.slice(0, n) : [] });
   } catch (e) {
