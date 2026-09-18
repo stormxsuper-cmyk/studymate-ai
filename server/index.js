@@ -29,7 +29,6 @@ function cleanJson(text) {
   return candidate;
 }
 
-// الاتصال بـ Groq API مباشرة
 async function callGroqAPI(messages, temperature = 0.2, isVision = false) {
   const model = isVision 
     ? "llama-3.2-11b-vision-preview" 
@@ -70,15 +69,7 @@ app.post("/api/analyze-images", upload.array("pages", 60), async (req, res) => {
       continue;
     }
 
-    // الـ Prompt المخفف جداً لضمان قراءة الصفحة بنجاح
-    const prompt = `اقرأ واستخرج كل النصوص والعناوين المكتوبة في هذه الصفحة باللغة العربية بدقة عالية.
-أعد الناتج بفرص JSON فقط كالتالي:
-{
- "status":"ok",
- "title":"عنوان الصفحة أو الموضوع",
- "confidence":95,
- "text":"اكتب كل الكلام والمحتوى المكتوب في الصفحة هنا بالكامل مرتباً في فقرات."
-}`;
+    const prompt = `استخرج كل النصوص والعناوين والأسئلة الموجودة في هذه الصورة باللغة العربية بوضوح.`;
 
     try {
       const content = await callGroqAPI([
@@ -91,20 +82,26 @@ app.post("/api/analyze-images", upload.array("pages", 60), async (req, res) => {
         }
       ], 0.1, true);
 
-      let parsed;
-      try { 
-        parsed = JSON.parse(cleanJson(content)); 
+      let extractedText = content || "";
+      let title = `صفحة ${i + 1}`;
+
+      try {
+        const parsed = JSON.parse(cleanJson(content));
+        if (parsed.text) extractedText = parsed.text;
+        if (parsed.title) title = parsed.title;
       } catch {
-        parsed = { status: "ok", title: `صفحة ${i + 1}`, confidence: 85, text: content, reason: null };
+        // إذا أرجع الموديل نصاً عادياً وليس JSON، نعتمده مباشرة بدون إفشال العملية
       }
+
+      const hasContent = Boolean(extractedText && extractedText.trim().length > 0);
 
       pages.push({
         page: i + 1,
-        status: "ok",
-        title: parsed.title || `صفحة ${i + 1}`,
-        confidence: Number(parsed.confidence || 90),
-        text: String(parsed.text || content || ""),
-        reason: null
+        status: hasContent ? "ok" : "failed",
+        title: title,
+        confidence: hasContent ? 90 : 0,
+        text: hasContent ? extractedText : "",
+        reason: hasContent ? null : "لم يتم استخراج أي نص من الصورة."
       });
     } catch (e) {
       pages.push({ page: i + 1, status: "failed", title: null, confidence: 0, text: "", reason: e.message });
@@ -137,12 +134,6 @@ app.post("/api/generate-note", async (req, res) => {
  "reviewQuestions":["..."]
 }
 
-قواعد:
-- لا تخترع حقائق أو قوانين غير موجودة في المصدر.
-- يجوز مثال توضيحي عام فقط إذا كان صحيحاً ومفيداً، واجعله واضحاً أنه مثال توضيحي.
-- لا تغير معنى القوانين.
-- اشرح ببساطة مع الحفاظ على المصطلحات العلمية.
-- لا تستخدم Markdown داخل JSON.
 المصدر:
 ${sourceText}`;
 
@@ -162,13 +153,13 @@ app.post("/api/generate-questions", async (req, res) => {
 
   const mcq = Math.min(n, Math.max(8, Math.round(n * 0.4)));
   const remaining = n - mcq;
-  const targetTypes = remaining > 0 ? "وزّع الباقي بين أكمل، صح/خطأ، سؤال قصير، ومقالي عند ملاءمة المادة. لا تجبر المقال إذا لم يكن مناسباً." : "";
+  const targetTypes = remaining > 0 ? "وزّع الباقي بين أكمل، صح/خطأ، سؤال قصير، ومقالي عند ملاءمة المادة." : "";
 
   const prompt = `أنشئ بنك أسئلة للثانوية العامة اعتماداً على المصدر التالي فقط.
 المادة: ${subject || "غير محددة"}
 العدد المطلوب: ${n}
 الصعوبة: ${difficulty}
-يجب أن يكون هناك ${mcq} سؤال اختيار من متعدد على الأقل (وبالضبط ${mcq} إن أمكن)، والباقي: ${targetTypes}
+عدد الاختيار من متعدد: ${mcq}، والباقي: ${targetTypes}
 
 أخرج JSON فقط:
 {"questions":[
@@ -179,13 +170,6 @@ app.post("/api/generate-questions", async (req, res) => {
  {"type":"essay","question":"...","answer":"نقاط التصحيح المتوقعة...","explanation":"...","topic":"..."}
 ]}
 
-قواعد:
-- لا تسأل عن معلومة غير موجودة في المصدر.
-- الاختيارات يجب أن تكون معقولة، وإجابة واحدة صحيحة بوضوح.
-- لا تكرر نفس الفكرة بشكل كسول.
-- اكتب بالعربية الواضحة.
-- لا تستخدم Markdown داخل JSON.
-- إذا لم توجد مادة كافية لنوع معين، استخدم نوعاً آخر مناسباً.
 المصدر:
 ${sourceText}`;
 
