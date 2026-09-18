@@ -29,9 +29,9 @@ function cleanJson(text) {
   return candidate;
 }
 
-// تعديل بسيط في دالة الاتصال لتوجيه الطلب لـ OpenRouter بنفس هيكلية كودك القديم
-async function callGroqAPI(messages, temperature = 0.2, isVision = false) {
-  const model = process.env.OPENROUTER_MODEL?.trim() || "google/gemini-2.0-flash-exp:free";
+// دالة الاتصال بـ OpenRouter API
+async function callOpenRouterAPI(messages, temperature = 0.2) {
+  const model = process.env.OPENROUTER_MODEL?.trim() || "meta-llama/llama-3.2-11b-vision-instruct:free";
 
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -73,7 +73,7 @@ app.post("/api/analyze-images", upload.array("pages", 60), async (req, res) => {
     const prompt = `استخرج كل النصوص والعناوين والأسئلة الموجودة في هذه الصورة باللغة العربية بوضوح.`;
 
     try {
-      const content = await callGroqAPI([
+      const content = await callOpenRouterAPI([
         {
           role: "user",
           content: [
@@ -81,7 +81,7 @@ app.post("/api/analyze-images", upload.array("pages", 60), async (req, res) => {
             { type: "image_url", image_url: { url: `data:${mime};base64,${file.buffer.toString("base64")}` } }
           ]
         }
-      ], 0.1, true);
+      ], 0.1);
 
       let extractedText = content || "";
       let title = `صفحة ${i + 1}`;
@@ -91,7 +91,7 @@ app.post("/api/analyze-images", upload.array("pages", 60), async (req, res) => {
         if (parsed.text) extractedText = parsed.text;
         if (parsed.title) title = parsed.title;
       } catch {
-        // إذا أرجع الموديل نصاً عادياً وليس JSON، نعتمده مباشرة بدون إفشال العملية
+        // نص عادي
       }
 
       const hasContent = Boolean(extractedText && extractedText.trim().length > 0);
@@ -105,6 +105,7 @@ app.post("/api/analyze-images", upload.array("pages", 60), async (req, res) => {
         reason: hasContent ? null : "لم يتم استخراج أي نص من الصورة."
       });
     } catch (e) {
+      console.error(`ERROR ON PAGE ${i + 1}:`, e.message);
       pages.push({ page: i + 1, status: "failed", title: null, confidence: 0, text: "", reason: e.message });
     }
   }
@@ -139,7 +140,7 @@ app.post("/api/generate-note", async (req, res) => {
 ${sourceText}`;
 
   try {
-    const content = await callGroqAPI([{ role: "user", content: prompt }], 0.25, false);
+    const content = await callOpenRouterAPI([{ role: "user", content: prompt }], 0.25);
     res.json(JSON.parse(cleanJson(content)));
   } catch (e) {
     res.status(502).json({ error: e.message || "فشل إنشاء المذكرة." });
@@ -175,7 +176,7 @@ app.post("/api/generate-questions", async (req, res) => {
 ${sourceText}`;
 
   try {
-    const content = await callGroqAPI([{ role: "user", content: prompt }], 0.35, false);
+    const content = await callOpenRouterAPI([{ role: "user", content: prompt }], 0.35);
     const parsed = JSON.parse(cleanJson(content));
     res.json({ questions: Array.isArray(parsed.questions) ? parsed.questions.slice(0, n) : [] });
   } catch (e) {
@@ -188,5 +189,8 @@ app.get(/.*/, (req, res) => {
   res.sendFile(path.join(__dirname, "..", "dist", "index.html"));
 });
 
-const port = Number(process.env.PORT || 3000);
-app.listen(port, () => console.log(`StudyMate AI running on port ${port}`));
+// استقبال البورت تلقائياً من بيئة تشغيل Railway أو استخدام 8080 افتراضياً
+const port = process.env.PORT || 8080;
+app.listen(port, '0.0.0.0', () => {
+  console.log(`StudyMate AI running on port ${port}`);
+});
